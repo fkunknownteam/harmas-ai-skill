@@ -56,8 +56,13 @@ python3 $S myhost cat public_html/config.php -   # dump to stdout
 python3 $S myhost put /tmp/new_api.php public_html/api   # safe overwrite deploy
 python3 $S myhost move /home/USER/public_html/a.php /home/USER/public_html/b.php
 python3 $S myhost rm /home/USER/public_html/junk.php     # no trash - careful
+python3 $S myhost db list                                # databases
+python3 $S myhost db users                               # db users + their grants
+python3 $S myhost db restrictions                        # prefix, name lengths
+python3 $S myhost db create USER_newdb                   # MysqlFE createdb (prefixed name)
+python3 $S myhost db drop USER_olddb
+CPANEL_DB_USER=USER_db CPANEL_DB_PASS=secret python3 $S myhost sql "SELECT * FROM users" --db USER_db
 python3 $S myhost uapi Fileman list_files dir=public_html
-python3 $S myhost db list                        # MySQL databases
 ```
 
 ## Procedure
@@ -78,6 +83,34 @@ python3 $S myhost db list                        # MySQL databases
    file also returns HTTP 200, so a status code alone proves nothing. Completion
    criterion: the response body contains your new marker.
 5. **Edit live** with `cat` -> local patch -> `put`. Never edit blind.
+
+## MySQL control
+
+`db list | users | restrictions` are plain UAPI reads. `db create|drop` go
+through the legacy API2 `MysqlFE` module (the UAPI `Mysql` module has no write
+functions on cPanel 114): the parameter is `db` and the value must carry the
+**account prefix** (`get_restrictions` tells you it). Many shared accounts are
+capped at 1 database — create returns "maximum allotment" then.
+
+For raw SQL, `sql "<query>"` deploys a throwaway token-gated PHP gateway
+(`scripts/_sqlgw.php`) into `public_html/.hermes_sql/`, runs the query over
+HTTPS, and deletes the gateway on success. Two env vars carry the DB password
+so it never lands in a command or URL:
+
+```bash
+CPANEL_DB_USER=firoztec_users CPANEL_DB_PASS=secret \
+python3 $S myhost sql "SELECT * FROM users" --db firoztec_users
+```
+
+SELECT/SHOW return `{"rows": [...], "count": N}`; writes return
+`{"affected": N}`. The gateway only exists during a successful `sql` call; if a
+run errors out it can leave the files behind — `rm` them or re-run until it
+succeeds. A wrong query returns the MySQL error string, which is safe: nothing
+executed.
+
+Why the gateway exists: MySQL on shared hosting binds the DB user to `localhost`
+and rejects remote logins (`Access denied for user X@<your-ip>`), and cPanel's
+API exposes no SQL runner at all. The gateway is the only route to arbitrary SQL.
 
 ## Pitfalls
 
